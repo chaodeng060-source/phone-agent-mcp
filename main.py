@@ -130,7 +130,19 @@ async def upload_screenshot_file(
     latest_screenshot["req_id"] = req_id
     return {"ok": True}
 
-
+@app.post("/api/upload_screenshot_raw")
+async def upload_screenshot_raw(request: Request):
+    auth = request.headers.get("Authorization", "")
+    if auth != f"Bearer {PHONE_TOKEN}":
+        raise HTTPException(401, "Unauthorized")
+    req_id = request.headers.get("X-Req-Id")
+    if not req_id:
+        raise HTTPException(400, "Missing X-Req-Id header")
+    contents = await request.body()
+    latest_screenshot["data"] = base64.b64encode(contents).decode()
+    latest_screenshot["ts"] = time.time()
+    latest_screenshot["req_id"] = req_id
+    return {"ok": True}
 app.mount("/", mcp.streamable_http_app())
 
 
