@@ -28,12 +28,16 @@ def hello() -> str:
 async def take_screenshot() -> Image:
     """Trigger the phone to take a screenshot and return it."""
     req_id = str(time.time())
+    # 重置,确保等的是新数据
+    latest_screenshot["data"] = None
+    latest_screenshot["req_id"] = None
     command_queue.append({"type": "screenshot", "req_id": req_id})
     for _ in range(600):
-        if latest_screenshot["req_id"] == req_id and latest_screenshot["data"]:
+        # 不再检查 req_id,只要有数据就返回
+        if latest_screenshot["data"]:
             return Image(data=base64.b64decode(latest_screenshot["data"]), format="png")
         await asyncio.sleep(0.1)
-    raise Exception("Screenshot timeout after 15s. Check that phone is online.")
+    raise Exception("Screenshot timeout after 60s. Check that phone is online.")
 
 
 @mcp.tool()
@@ -130,6 +134,7 @@ async def upload_screenshot_file(
     latest_screenshot["req_id"] = req_id
     return {"ok": True}
 
+
 @app.post("/api/upload_screenshot_raw")
 async def upload_screenshot_raw(request: Request):
     auth = request.headers.get("Authorization", "")
@@ -143,6 +148,8 @@ async def upload_screenshot_raw(request: Request):
     latest_screenshot["ts"] = time.time()
     latest_screenshot["req_id"] = req_id
     return {"ok": True}
+
+
 app.mount("/", mcp.streamable_http_app())
 
 
