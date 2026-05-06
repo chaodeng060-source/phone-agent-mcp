@@ -50,7 +50,7 @@ def swipe(x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> str:
 @mcp.tool()
 def input_text(text: str) -> str:
     """Queue typing text (must focus an input field first)."""
-    command_queue.append({"type": "input", "text": text})
+    command_queue.append({"type": "input_text", "text": text})
     return f"Queued input: {text[:30]}"
 
 @mcp.tool()
