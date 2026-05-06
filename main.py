@@ -29,7 +29,7 @@ async def take_screenshot() -> Image:
     """Trigger the phone to take a screenshot and return it."""
     req_id = str(time.time())
     command_queue.append({"type": "screenshot", "req_id": req_id})
-    for _ in range(150):
+    for _ in range(600):
         if latest_screenshot["req_id"] == req_id and latest_screenshot["data"]:
             return Image(data=base64.b64decode(latest_screenshot["data"]), format="png")
         await asyncio.sleep(0.1)
