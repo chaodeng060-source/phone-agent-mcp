@@ -3,13 +3,38 @@ from mcp.server.fastmcp import FastMCP, Image
 from mcp.server.transport_security import TransportSecuritySettings
 from contextlib import asynccontextmanager
 from collections import deque
+from PIL import Image as PILImage
+from io import BytesIO
 import base64, time, os, asyncio
 
-# Shared in-memory state
+# ---- Compression config ----
+SCREENSHOT_MAX_WIDTH = 600       # 缩到600宽,vivo原图1216,差不多减半
+SCREENSHOT_JPEG_QUALITY = 70     # JPEG质量,70足够看清
+
+
+def compress_screenshot(raw_bytes: bytes) -> bytes:
+    """把截图缩到指定宽度,转JPEG."""
+    img = PILImage.open(BytesIO(raw_bytes))
+    # JPEG不支持透明,有alpha通道先转RGB
+    if img.mode in ("RGBA", "LA", "P"):
+        img = img.convert("RGB")
+    # 按比例缩放,只在原图比目标宽时才缩
+    if img.width > SCREENSHOT_MAX_WIDTH:
+        ratio = SCREENSHOT_MAX_WIDTH / img.width
+        new_h = int(img.height * ratio)
+        img = img.resize((SCREENSHOT_MAX_WIDTH, new_h), PILImage.LANCZOS)
+    out = BytesIO()
+    img.save(out, format="JPEG", quality=SCREENSHOT_JPEG_QUALITY, optimize=True)
+    return out.getvalue()
+
+
+# ---- Shared in-memory state ----
 command_queue = deque()
 latest_screenshot = {"data": None, "ts": 0, "req_id": None}
+screenshot_event = asyncio.Event()   # 事件驱动,代替原来的0.1s轮询
 
-# MCP config
+
+# ---- MCP config ----
 security = TransportSecuritySettings(
     enable_dns_rebinding_protection=False,
     allowed_hosts=["*"],
@@ -31,13 +56,15 @@ async def take_screenshot() -> Image:
     # 重置,确保等的是新数据
     latest_screenshot["data"] = None
     latest_screenshot["req_id"] = None
+    screenshot_event.clear()
     command_queue.append({"type": "screenshot", "req_id": req_id})
-    for _ in range(600):
-        # 不再检查 req_id,只要有数据就返回
-        if latest_screenshot["data"]:
-            return Image(data=base64.b64decode(latest_screenshot["data"]), format="png")
-        await asyncio.sleep(0.1)
-    raise Exception("Screenshot timeout after 60s. Check that phone is online.")
+    try:
+        await asyncio.wait_for(screenshot_event.wait(), timeout=60)
+    except asyncio.TimeoutError:
+        raise Exception("Screenshot timeout after 60s. Check that phone is online.")
+    if not latest_screenshot["data"]:
+        raise Exception("Screenshot event fired but no data. Server bug.")
+    return Image(data=base64.b64decode(latest_screenshot["data"]), format="jpeg")
 
 
 @mcp.tool()
@@ -113,9 +140,16 @@ async def upload_screenshot(request: Request):
     if auth != f"Bearer {PHONE_TOKEN}":
         raise HTTPException(401, "Unauthorized")
     body = await request.json()
-    latest_screenshot["data"] = body.get("data")
+    raw_b64 = body.get("data") or ""
+    if raw_b64:
+        raw = base64.b64decode(raw_b64)
+        compressed = compress_screenshot(raw)
+        latest_screenshot["data"] = base64.b64encode(compressed).decode()
+    else:
+        latest_screenshot["data"] = None
     latest_screenshot["ts"] = time.time()
     latest_screenshot["req_id"] = body.get("req_id")
+    screenshot_event.set()
     return {"ok": True}
 
 
@@ -129,9 +163,11 @@ async def upload_screenshot_file(
     if auth != f"Bearer {PHONE_TOKEN}":
         raise HTTPException(401, "Unauthorized")
     contents = await file.read()
-    latest_screenshot["data"] = base64.b64encode(contents).decode()
+    compressed = compress_screenshot(contents)
+    latest_screenshot["data"] = base64.b64encode(compressed).decode()
     latest_screenshot["ts"] = time.time()
     latest_screenshot["req_id"] = req_id
+    screenshot_event.set()
     return {"ok": True}
 
 
@@ -144,9 +180,11 @@ async def upload_screenshot_raw(request: Request):
     if not req_id:
         raise HTTPException(400, "Missing X-Req-Id header")
     contents = await request.body()
-    latest_screenshot["data"] = base64.b64encode(contents).decode()
+    compressed = compress_screenshot(contents)
+    latest_screenshot["data"] = base64.b64encode(compressed).decode()
     latest_screenshot["ts"] = time.time()
     latest_screenshot["req_id"] = req_id
+    screenshot_event.set()
     return {"ok": True}
 
 
